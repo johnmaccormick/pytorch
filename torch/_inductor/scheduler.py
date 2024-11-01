@@ -411,6 +411,11 @@ class BaseSchedulerNode:
             for node in self.scheduler.name_to_fused_node[self.get_name()].get_nodes()
         }
 
+        ordered_reads = sorted(self.read_writes.reads, key=lambda x: x.name)
+        inconsequential_nodes = (
+            self.ancestors - {self.get_name()}
+        ) | self.scheduler.completed_operations
+
         for buf in self.get_outputs():
             buf_node = buf.node
             assert buf_node is not None
@@ -2172,7 +2177,12 @@ class Scheduler:
                 # dead code
                 log.debug("removed dead operation: %s", node.get_name())
                 V.graph.removed_operations.add(node.get_name())
-
+                for read in node.read_writes.reads:
+                    if read.name in self.name_to_buf:
+                        users = self.name_to_buf[read.name].users
+                        self.name_to_buf[read.name].users = [
+                            u for u in users if u.node.get_name() != node.get_name()
+                        ]
         self.nodes = list(reversed(updated_nodes))
 
         # Prune any WeakDeps no longer needed
