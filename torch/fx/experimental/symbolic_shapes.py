@@ -1982,6 +1982,16 @@ SYMPY_INTERP = {
     "IntTrueDiv": operator.truediv,
     "FloatTrueDiv": operator.truediv,
     "ToFloat": builtins.float,
+    "OpaqueUnaryFn_cos": math.cos,
+    "OpaqueUnaryFn_cosh": math.cosh,
+    "OpaqueUnaryFn_acos": math.acos,
+    "OpaqueUnaryFn_sin": math.sin,
+    "OpaqueUnaryFn_sinh": math.sinh,
+    "OpaqueUnaryFn_asin": math.asin,
+    "OpaqueUnaryFn_tan": math.tan,
+    "OpaqueUnaryFn_tanh": math.tanh,
+    "OpaqueUnaryFn_atan": math.atan,
+    "OpaqueUnaryFn_sqrt": math.sqrt,
 }
 
 
@@ -3054,7 +3064,7 @@ class ShapeEnv:
         # they get assigned the same symbolic variable
         self.val_to_var: Dict[int, sympy.Symbol] = {}
         if specialize_zero_one:
-            self.val_to_var = {0: sympy.Integer(0), 1: sympy.Integer(1)}
+            self.val_to_var = {0: sympy.S.Zero, 1: sympy.S.One}
         self.unbacked_symfloat_counter = itertools.count()
         self.unbacked_symint_counter = itertools.count()
         # Similar to guards, but these MUST evaluate to true and can
@@ -5833,9 +5843,11 @@ class ShapeEnv:
             hint_size = self.size_hint(x, allow_none=True)
             if hint_size is None:
                 size = sys.maxsize
-            else:
+            elif symbol_is_type(x, SymT.SIZE):
                 assert isinstance(hint_size, sympy.Expr)
                 size = int(hint_size)
+            else:
+                size = sys.maxsize
             name = x.name
             # 1 puts ephemeral sourced symbols first when sorting in reverse
             return (1 if has_only_ephemeral_sources else 0, size, name)
@@ -6138,6 +6150,8 @@ class ShapeEnv:
         #   1. 'translation_validation' is set
         #   2. the corresponding 'fx_node' is not 'None'
         #   3. the guard should not be suppressed
+        #   4. the guard doesn't contain backed symfloat symbols
+        #      since z3 can't handle floats
         #
         # If all of the above check, we create an FX node representing the
         # actual expression to be guarded.
@@ -6148,6 +6162,7 @@ class ShapeEnv:
             and fx_node is not None
             and not self._suppress_guards_tls()
             and not size_oblivious
+            and not any(symbol_is_type(s, SymT.FLOAT) for s in orig_expr.free_symbols)
         ):
             # TODO: does this even worked with unbacked :think:
             concrete_val = compute_concrete_val()
@@ -6597,7 +6612,7 @@ def _suggest_torch_checks(
         f"torch._check({printer.doprint(sympy.Not(cond))})",
     ]
     for i, fix in enumerate(suggested_fixes):
-        msg += f"\n  {i+1}. {fix}"
+        msg += f"\n  {i + 1}. {fix}"
     src_mapped = ", ".join(
         f"`{s}` with {' or '.join(src_map[s])}"
         for s in sorted(s.name for s in cond.free_symbols)
