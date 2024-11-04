@@ -553,10 +553,50 @@ class CPUReproTests(TestCase):
                     self.assertEqual(fn_opt(*inps_var), mod(*inps_var))
 
     @parametrize(
-        "unbatched, input_size, hidden_size, num_layers, bidirectional, bias, empty_state, batch_first, batch_size, seq_len",
+        "input_size, hidden_size, num_layers, bidirectional, bias, empty_state, batch_first, batch_size, seq_len",
         itertools.product(
             *[
+                [1, 2],
+                [2],
+                [1, 2],
+                [False, True],
+                [False, True],
+                [False, True],
                 [True, False],
+                [1, 2],
+                [1, 2],
+            ]
+        ),
+    )
+    def test_lstm_packed_unbatched(
+        self,
+        input_size,
+        hidden_size,
+        num_layers,
+        bidirectional,
+        bias,
+        empty_state,
+        batch_first,
+        batch_size,
+        seq_len,
+    ):
+        self._test_lstm_packed(
+            True,
+            input_size,
+            hidden_size,
+            num_layers,
+            bidirectional,
+            bias,
+            empty_state,
+            batch_first,
+            batch_size,
+            seq_len,
+        )
+
+    @parametrize(
+        "input_size, hidden_size, num_layers, bidirectional, bias, empty_state, batch_first, batch_size, seq_len",
+        itertools.product(
+            *[
                 [1, 2],
                 [2],
                 [1, 2],
@@ -571,7 +611,6 @@ class CPUReproTests(TestCase):
     )
     def test_lstm_packed(
         self,
-        unbatched,
         input_size,
         hidden_size,
         num_layers,
@@ -583,7 +622,7 @@ class CPUReproTests(TestCase):
         seq_len,
     ):
         self._test_lstm_packed(
-            unbatched,
+            False,
             input_size,
             hidden_size,
             num_layers,
@@ -4398,6 +4437,21 @@ class CPUReproTests(TestCase):
                 funcs, example_shapes, mixed_types, check_vecns
             ):
                 check_use_full_bits(func, shapes, dtype, mixed, check_vecn)
+
+    @requires_vectorization
+    def test_for_loop_collapsed(self):
+        # https://github.com/pytorch/pytorch/issues/122281
+        def fn(x):
+            return x.transpose(1, 0).contiguous()
+
+        x = torch.randn(1999985, 2)
+        opt_fn = torch._dynamo.optimize("inductor")(fn)
+        _, code = run_and_get_cpp_code(opt_fn, x)
+        self.assertTrue(same(fn(x), opt_fn(x)))
+        # def and use
+        FileCheck().check_count("#pragma omp for collapse(2)", 1, exactly=True).run(
+            code
+        )
 
 
 if __name__ == "__main__":
