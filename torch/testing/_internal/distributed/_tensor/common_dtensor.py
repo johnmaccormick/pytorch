@@ -5,7 +5,7 @@
 import itertools
 import sys
 from dataclasses import dataclass
-from functools import wraps
+from functools import partial, wraps
 from typing import Any, Callable, cast, Dict, Iterator, List, Sequence, Tuple, TypeVar
 
 import torch
@@ -25,8 +25,8 @@ from torch.distributed.tensor.parallel import (
 from torch.testing._internal.common_distributed import (
     MultiProcessTestCase,
     MultiThreadedTestCase,
-    skip_if_lt_x_gpu,
     run_subtests,
+    skip_if_lt_x_gpu,
     TEST_SKIPS,
 )
 
@@ -363,35 +363,33 @@ class DTensorTestBase(MultiProcessTestCase):
 TestFunc = Callable[[object], object]
 
 
+def _with_comms(func: TestFunc, eager_init: bool = False) -> TestFunc:
+
+    @wraps(func)  # pyre-ignore[6]
+    def wrapper(
+        self, *args: Tuple[object], **kwargs: Dict[str, Any]  # type: ignore[misc]
+    ) -> None:
+        # if enough GPU we can use GPU, otherwise we fallback to CPU
+        if not torch.cuda.is_available() or torch.cuda.device_count() < self.world_size:
+            self.device_type = "cpu"
+        else:
+            self.device_type = DEVICE_TYPE
+
+        self.init_pg(eager_init)
+
+        try:
+            func(self, *args, **kwargs)  # type: ignore[misc]
+        except Exception as e:
+            dist.destroy_process_group()
+            raise e
+
+        self.destroy_pg()
+
+    return wrapper
+
 # wrapper to initialize comms (processgroup)
-def with_comms(eager_init: bool = False) -> TestFunc:
-
-    def decorator(func):
-
-        @wraps(func)  # pyre-ignore[6]
-        def wrapper(
-            self, *args: Tuple[object], **kwargs: Dict[str, Any]  # type: ignore[misc]
-        ) -> None:
-            # if enough GPU we can use GPU, otherwise we fallback to CPU
-            if not torch.cuda.is_available() or torch.cuda.device_count() < self.world_size:
-                self.device_type = "cpu"
-            else:
-                self.device_type = DEVICE_TYPE
-
-            self.init_pg(eager_init)
-
-            try:
-                func(self, *args, **kwargs)  # type: ignore[misc]
-            except Exception as e:
-                dist.destroy_process_group()
-                raise e
-
-            self.destroy_pg()
-
-        return wrapper
-
-    return decorator
-
+def with_comms(eager_init: TestFunc | bool = False) -> TestFunc:
+    return _with_comms(func=eager_init) if callable(eager_init) else partial(_with_comms, eager_init=eager_init)
 
 
 class DTensorOpTestBase(MultiThreadedTestCase):
